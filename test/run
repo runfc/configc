@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+#  Little helper to find all tests and run and display some colors,
+#  because people like it (and because I used glasses and can't buy a bigger monitor)
+#
+#  TODO: Run tests in a temporary directory
+#  TODO: Show the failed tests output
+
+RED_COLOR="\033[31m"
+GREEN_COLOR="\033[32m"
+BLUE_COLOR="\033[34m"
+RESET_COLOR="\033[0m"
+
+function show_okay()
+{
+    echo -ne $GREEN_COLOR
+    echo -e $*
+    echo -ne $RESET_COLOR
+}
+
+function show_info()
+{
+    echo -ne $BLUE_COLOR
+    cat $1
+    echo -ne $RESET_COLOR
+}
+
+function show_failure()
+{
+    echo -ne $RED_COLOR
+    echo -e $*
+    echo -ne $RESET_COLOR
+}
+
+function show_failure_cat()
+{
+    echo -ne $RED_COLOR
+    cat $1
+    echo -ne $RESET_COLOR
+}
+
+function run_tests()
+{
+    target="$1"
+    out="${target}.out"
+
+    if [[ "$WITH_STRACE" ]] && [[ "$WITH_STRACE" = "1" ]]; then
+	strace ./"$target" &>"$out"
+    elif [[ "$WITH_LTRACE" ]] && [[ "$WITH_LTRACE" = "1" ]]; then
+	ltrace ./"$target" &>"$out"
+    else
+	./"$target" &>"$out"
+    fi
+    if [[ $? -eq 0 ]]; then
+	show_okay "+= test: ${target} ok"
+	show_info $out
+	echo
+    else
+	failures=$((failures + 1))
+
+	show_failure "+= ${target} fail"
+	show_info "$out"
+    fi
+}
+
+function main() {
+    failures=0
+
+    for t in $(ls *.run); do
+	run_tests "$t"
+    done
+
+    if [[ $failures -gt 0 ]]; then
+	show_failure "They are test(s) failures, please check above output"
+	exit 1
+    fi
+
+    echo "Cleaning up test dirs [use WITHOUT_CLEAN to disable it]"
+    if [[ ! "$WITHOUT_CLEAN" ]]; then
+	make clean >/dev/null;
+    fi
+}
+
+main
