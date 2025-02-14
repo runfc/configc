@@ -3,6 +3,8 @@ CC = gcc
 CFLAGS = -std=c11 -g3
 CFLAGS += -Wall
 CFLAGS += -Wextra
+CFLAGS += -Werror
+CFLAGS += -Wpendantic
 CFLAGS += -Wunused
 CFLAGS += -fPIC
 

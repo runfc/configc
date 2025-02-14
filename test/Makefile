@@ -1,8 +1,12 @@
 CC = gcc
 
 CFLAGS = -std=c11
-CFLAGS = -g0
-CFLAGS = -Wunused
+CFLAGS += -g0
+CFLAGS += -Wunused
+CFLAGS += -Wall
+CFLAGS += -Wextra
+CFLAGS += -Werror
+CFLAGS += -Wpedantic
 
 LDFLAGS = -D SYSPROC_ROOT='"/tmp/runfc/"'
 LDFLAGS += -I../src
