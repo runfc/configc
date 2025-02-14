@@ -77,17 +77,22 @@ int sysctl_get(struct sysctl_t *sysctl)
 	return rc;
 }
 
+void check_correctness(struct sysctl_t *sysctl)
+{
+	if (sysctl == NULL)
+		die("BUG: Cannot call sysctl function with a null sysctl_t");
+	if (sysctl->desired == NULL)
+		die("BUG: Cannot call sysctl function a null sysctl.desired");
+	if (sysctl->act_value == NULL)
+		die("BUG: Cannot call sysctl with a null sysctl.act_value, forgot to call sysctl_get()?");
+}
+
 /*
  * Shows the diff between actual vs desired state
  */
 int sysctl_diff(struct sysctl_t* sysctl)
 {
-	if (sysctl == NULL)
-		die("BUG: Cannot call sysctl_diff() with a null sysctl_t");
-	if (sysctl->desired == NULL)
-		die("BUG: Cannot call sysctl_apply() with a null sysctl.desired");
-	if (sysctl->act_value == NULL)
-		die("BUG: Cannot call sysctl_apply() with a null sysctl.act_value, forgot to call sysctl_get()?");
+	check_correctness(sysctl);
 
 	return strcmp(sysctl->desired, sysctl->act_value);
 }
@@ -99,12 +104,7 @@ int sysctl_apply(struct sysctl_t* sysctl)
 {
 	int fd = 0;
 
-	if (sysctl == NULL)
-		die("BUG: Cannot call sysctl_apply() with a null sysctl_t");
-	if (sysctl->desired == NULL)
-		die("BUG: Cannot call sysctl_apply() with a null sysctl.desired");
-	if (sysctl->act_value == NULL)
-		die("BUG: Cannot call sysctl_apply() with a null sysctl.act_value, forgot to call sysctl_get()?");
+	check_correctness(sysctl);
 
 	fd = xopen(sysctl->path, O_WRONLY, 0);
 	if (fd < 0)
