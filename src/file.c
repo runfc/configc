@@ -1,150 +1,95 @@
 #include "configc.h"
 #include "file.h"
 
-struct file_t *file_init(const char *path, const char *content, mode_t mode, unsigned int opts)
-{
-	struct file_t *file = NULL;
+#define MAX_FILE_BUF_SIZE 2048
 
-	file = xmalloc(sizeof(struct file_t));
-	file->path = (char *)path;
-	file->desired = (char *)content;
-	file->mode = mode;
-	file->act_value = NULL;
-	file->opts = opts;
-	return file;
-}
-
-void file_free(struct file_t *file)
-{
-	if (!file) /* unlikely */
-		return;
-	if (file->act_value)
-		free(file->act_value);
-	if (file->path)
-		free(file->path);
-	if (file->desired)
-		free(file->desired);
-	free(file);
-}
-
-static void check_correctness(struct file_t *file)
-{
-	if (!file)
-		BUG("BUG: Cannot call file_get() with a null *file");
-	if (!file->path)
-		BUG("BUG: Cannot call file_get() with a null *file->path");
-}
-
-int file_get(struct file_t *file)
+static int check_file_diff(struct file_t *file)
 {
 	int rc = 0;
-	char *act_value = NULL;
+	int fd;
+	int nread;
+	char buf[MAX_FILE_BUF_SIZE] = { 0 };
 
-	check_correctness(file);
+	fd = open(file->path, O_RDONLY, 0);
+	if (fd < 0)
+		return -errno;
 
-	if (!file_exists(file->path))
-		return 0;
-
-	if (file->opts & FILE_OPT_LAZY) {
-		/*
-		 * in LAZY mode, we would only bother reading the file
-		 * content during the diff(), so we delay this operation
-		 * as much as possible.
-		 *
-		 * A open() is issued, in order to check if it can at
-		 * least read the file, if it exists.
-		 */
-		int fd;
-
-		if ((fd = open(file->path, O_RDONLY, 0) < 0)) {
-			perror("[configc file] Unable to open file");
-			return -ERR_UNABLE_OPEN_FILE;
+	do {
+		nread = read(fd, buf, MAX_FILE_BUF_SIZE);
+		if (nread == 0) {
+			rc = 0;
+			break;
+		} else if (nread < 0) {
+			rc = -errno;
+			break;
 		}
-		close(fd);
-		return 0;
-	}
 
-        act_value = read_whole_file(file->path, &rc);
-	if (rc < 0 || !act_value) {
-		free(file->act_value);
-		return rc;
-	}
+		/*
+		 * As we read MAX_FILE_BUF_SIZE at a time, we should ensure that it is also
+		 * the upper boundary for comparasion.  Not only this optmize the codes, but
+		 * most importantly it provide more safety properties.
+		 */
+		if (strncmp(buf, file->desired_value, MAX_FILE_BUF_SIZE)) {
+			rc = 1;
+			break;
+		}
 
-	file->act_value = act_value;
-	return 0;
+	} while (true);
+
+	close(fd);
+	return rc;
 }
 
 int file_diff(struct file_t *file)
 {
-	struct stat sb;
+	struct stat sb = { 0 };
 
-	check_correctness(file);
+	if (!file)
+		BUG("[VIOLATION] Cannot call file_diff() with a null pointer");
 
-	if (!file_exists(file->path))
-		return 1;
-
-	if (file_stat(file->path, &sb) && (file->mode & sb.st_mode) != file->mode)
-		return 1;
-
-	if (file->opts & FILE_OPT_LAZY) {
-		int rc = 0;
-
-	        file->act_value = read_whole_file(file->path, &rc);
-		if (rc < 0)
-			return rc;
+	if (stat(file->path, &sb) < 0) {
+		if (errno == ENOENT) {
+			/*
+			 * When a file does not exists, we should return there's a
+			 * a diff() between desired and actual state
+			 */
+			return 1;
+		} else
+			return -errno;
 	}
-	return strcmp(file->desired, file->act_value);
+
+	return check_file_diff(file);
 }
 
-/*
- * Returns a heap-allocated string where base + new are concatenated
- * together
- */
-static char *strbuf_append(const char *base, const char *new)
-{
-	char *concated = NULL;
-	size_t base_length = strlen(base);
-	size_t new_length = strlen(new);
-
-	concated = xmalloc(sizeof(char) + (base_length + new_length + 1));
-
-	memcpy(concated, base, base_length);
-	memcpy(concated + base_length, new, new_length);
-	concated[base_length + new_length + 1] = '\0';
-	return concated;
-}
+#define TMPFILE_PREFIX ".konfig"
+#define TMPFILE_PREFIX_SIZE 7
 
 int file_apply(struct file_t *file)
 {
-	int err = 0;
-	int fd = 0;
-	char *tempfile;
+	int rc = 0;
+	int fd;
+	char tempfile[MAX_FILE_BUF_SIZE] = { 0 };
+	size_t path_len = strlen(file->path);
+	size_t desired_value_len = strlen(file->desired_value);
 
-	check_correctness(file);
+	if (!file)
+		BUG("[VIOLATION] Cannot call file_apply() with a null pointer");
+	if ((path_len + 7) >= MAX_FILE_BUF_SIZE)
+		BUG("File's path is too large");
 
-	tempfile = strbuf_append(file->path, ".configc");
-	fd = xopen(tempfile, O_CREAT | O_WRONLY, file->mode);
-	if (fd < 0) {
-		err = -ERR_UNABLE_OPEN_FILE;
-		goto cleanup;
+	memcpy(tempfile, file->path, path_len);
+	memcpy(tempfile + path_len + 1, TMPFILE_PREFIX, TMPFILE_PREFIX_SIZE);
+
+	fd = open(tempfile, O_CREAT | O_WRONLY, file->mode);
+	if (fd < 0)
+		return -errno;
+
+	if (write(fd, file->desired_value, desired_value_len) < 0 ||
+	    fsync(fd) < 0 ||
+	    rename(tempfile, file->path) < 0) {
+		rc = -errno;
 	}
 
-	if (write(fd, file->desired, strlen(file->desired)) < 0) {
-		err = -ERR_UNABLE_WRITE_FILE;
-		goto cleanup;
-	}
-
-	if (rename(tempfile, file->path) < 0) {
-		err = -ERR_UNABLE_WRITE_FILE;
-		goto cleanup;
-	}
-
-	/* do another get to ensure apply worked */
-	file_get(file);
-
- cleanup:
-	free(tempfile);
-	if (fd > 0)
-		close(fd);
-	return err;
+	close(fd);
+	return rc;
 }
