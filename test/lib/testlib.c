@@ -22,7 +22,7 @@ void create_file(const char *path, const char *content, mode_t mode)
 	if (file_exists(path))
 		unlink(path);
 
-	fd = xopen(path, O_CREAT | O_WRONLY, mode);
+	fd = open(path, O_CREAT | O_WRONLY, mode);
 	if (fd < 0)
 		BUG("TEST: Unable to open file: %s\n", path);
 
