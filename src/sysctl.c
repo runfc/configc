@@ -1,133 +1,70 @@
 #include "configc.h"
 #include "sysctl.h"
 
-static char *get_fullpath(const char *syskey)
+#define MAX_SYSCTL_BUF_SIZE 256
+
+static void get_sysctl_fullpath(char *buf, const char *key)
 {
-	unsigned int i = 0;
-	const char *sysproc_root = SYSPROC_ROOT;
-	size_t keylen = strlen(syskey);
-	size_t baselen = strlen(sysproc_root);
-	char *buf = xmalloc(sizeof(char) * (baselen + keylen + 1));
+	const char *root = SYSPROC_ROOT;
+	size_t root_len = strlen(SYSPROC_ROOT);
+	size_t key_len = strlen(key);
 
-	for (i = 0; i < baselen; i++)
-		buf[i] = sysproc_root[i];
+	memcpy((char *)buf, root, root_len);
 
-	for (i = 0; i < keylen; i++) {
-		char c = syskey[i];
+	/*
+	 * Copy each char from key to buf, replacing any "." with "/"
+	 */
+	for (size_t i = 0; i < key_len; i++) {
+		char ch = key[i];
 
-		if (c != '.')
-			buf[baselen + i] = c;
+		if (ch == '.')
+			buf[root_len + i] = '/';
 		else
-			buf[baselen + i] = '/';
+			buf[root_len + i] = ch;
 	}
-	return buf;
 }
 
-struct sysctl_t *sysctl_init(const char *key, const char *value)
+int sysctl_diff(struct sysctl_t *sysctl)
 {
-	char *path = NULL;
-	struct sysctl_t *sysctl = NULL;
+	int fd;
+	char buf[MAX_SYSCTL_BUF_SIZE] = { 0 };
+	char fullpath[MAX_SYSCTL_BUF_SIZE * 2] = { 0 };
 
-	path = get_fullpath(key);
-	if (!path)
-		return NULL;
-
-	sysctl = xmalloc(sizeof(struct sysctl_t));
-	sysctl->key = key;
-	sysctl->desired = value;
-	sysctl->act_value = NULL;
-	sysctl->path = path;
-	return sysctl;
-}
-
-/*
- * Probe the system to get the value of sysstat configuration
- */
-int sysctl_get(struct sysctl_t *sysctl)
-{
-	int fd, n;
-	int rc = 0;
-	char *value = NULL;
-	char *buf = xmalloc(sizeof(char) * 64);
-
-	if (sysctl->path == NULL)
-		die("BUG: Cannot call sysctl_get() with a null sysctl->path");
-
-	fd = xopen(sysctl->path, O_RDONLY, 0);
-	if (fd < 0)
-		return -ERR_UNABLE_OPEN_FILE;
-
-	n = read(fd, buf, 512);
-	if (n < 0)
-	        return -ERR_UNABLE_READ_FILE;
-
-	if (n < 0 || n > 1024)
-		die("exceeed the max number of alloc() of this program, annoying I know!");
-
-	value = xmalloc(sizeof(char) * (n + 1));
-	for (int i = 0; i < n; i++) {
-		char c = buf[i];
-
-		if (c && !isspace(c))
-			value[i] = buf[i];
-	}
-
-	sysctl->act_value = value;
-	free(buf);
-	return rc;
-}
-
-void check_correctness(struct sysctl_t *sysctl)
-{
-	if (sysctl == NULL)
-		die("BUG: Cannot call sysctl function with a null sysctl_t");
-	if (sysctl->desired == NULL)
-		die("BUG: Cannot call sysctl function a null sysctl.desired");
-	if (sysctl->act_value == NULL)
-		die("BUG: Cannot call sysctl with a null sysctl.act_value, forgot to call sysctl_get()?");
-}
-
-/*
- * Shows the diff between actual vs desired state
- */
-int sysctl_diff(struct sysctl_t* sysctl)
-{
-	check_correctness(sysctl);
-
-	return strcmp(sysctl->desired, sysctl->act_value);
-}
-
-/*
- * Attempt to apply the configuration
- */
-int sysctl_apply(struct sysctl_t* sysctl)
-{
-	int fd = 0;
-
-	check_correctness(sysctl);
-
-	fd = xopen(sysctl->path, O_WRONLY, 0);
-	if (fd < 0)
-		return -ERR_UNABLE_OPEN_FILE;
-
-	if (write(fd, sysctl->desired, strlen(sysctl->desired)) < 0)
-		return -ERR_UNABLE_WRITE_FILE;
-	close(fd);
-
-	/* do another get to ensure apply worked */
-	sysctl_get(sysctl);
-	return 0;
-}
-
-void sysctl_free(struct sysctl_t *sysctl)
-{
 	if (!sysctl)
-		return;
+		BUG("[VIOLATION] Cannot called sysctl_diff() with a null pointer");
 
-	if (sysctl->path)
-		free(sysctl->path);
-	if (sysctl->act_value)
-		free(sysctl->act_value);
-	if (sysctl)
-		free(sysctl);
+	get_sysctl_fullpath(fullpath, sysctl->key);
+	fd = open(fullpath, O_RDONLY);
+	if (fd < 0)
+		return -errno;
+
+	if (read(fd, buf, MAX_SYSCTL_BUF_SIZE) < 0) {
+		close(fd);
+		return -errno;
+	}
+
+	close(fd);
+	return strncmp(sysctl->desired_value, buf, MAX_SYSCTL_BUF_SIZE) != 0;
+}
+
+int sysctl_apply(struct sysctl_t *sysctl)
+{
+	int fd;
+	char fullpath[MAX_SYSCTL_BUF_SIZE * 2] = { 0 };
+
+	if (!sysctl)
+		BUG("[VIOLATION] Cannot called sysctl_apply() with a null pointer");
+
+	get_sysctl_fullpath(fullpath, sysctl->key);
+	fd = open(fullpath, O_WRONLY);
+	if (fd < 0)
+		return -errno;
+
+	if (write(fd, sysctl->desired_value, strlen(sysctl->desired_value)) < 0) {
+		close(fd);
+		return -errno;
+	}
+
+	close(fd);
+	return 0;
 }
